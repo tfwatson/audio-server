@@ -6,10 +6,12 @@
 
 #include "Listener.hpp"
 
+// Flag for program running state
 std::atomic<bool> running = true;
 
 void signalHandler(int signal)
 {
+    // Set running state to false so program terminates
     running = false;
 }
 
@@ -31,7 +33,8 @@ int main()
     }
 
     // Wait for interrupt signal to gracefully exit
-    while(running) {
+    while (running)
+    {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
