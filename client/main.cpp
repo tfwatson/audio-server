@@ -1,16 +1,16 @@
-#include <cstdio>
-#include "portaudio.h"
+#include <iostream>
+#include <memory>
+
+#include "Listener.hpp"
 
 int main()
 {
-    PaError err = Pa_Initialize();
-    if (err != paNoError) {
-        std::fprintf(stderr, "PortAudio init failed: %s\n", Pa_GetErrorText(err));
-        return 1;
+    try
+    {
+        auto listener = std::make_unique<Listener>(44100, 512, 2);
     }
-
-    std::printf("PortAudio initialized — version: %s\n", Pa_GetVersionText());
-
-    Pa_Terminate();
-    return 0;
+    catch (const std::runtime_error& error)
+    {
+        std::cerr << error.what() << '\n';
+    }
 }

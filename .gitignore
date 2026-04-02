@@ -1,2 +1,5 @@
 build/
 portaudio/
+.vscode/
+compile_commands.json
+.cache/
