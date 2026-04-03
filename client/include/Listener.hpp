@@ -37,14 +37,11 @@ class Listener
     PaStream* mStream = nullptr;
     PaError mError = paNoError;
 
-    // Flag to track PortAudio initialization
-    bool mInitialized = false;
-
     /**
      * @brief Function that's called everytime PortAudio fills a buffer
      *
      * @param input Buffer for audio input
-     * @param output Buffer for audio output
+     * @param output Buffer for audio output (not used)
      * @param framesPerBuffer How many frames are in each buffer
      * @param timeInfo Time information about buffer (see PortAudio docs for
      * description)

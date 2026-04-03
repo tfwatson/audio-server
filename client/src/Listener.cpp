@@ -13,33 +13,10 @@ Listener::Listener(unsigned int sampleRate, unsigned int framesPerBuffer,
 {
     std::cout << "Listener initializing...\n";
 
-    // Suppress ALSA/JACK warnings
-    FILE* devNull = fopen("/dev/null", "w");
-    FILE* origStderr = stderr;
-    stderr = devNull;
-
-    // Initialize PortAudio
-    mError = Pa_Initialize();
-
-    // Restore stderr
-    stderr = origStderr;
-    fclose(devNull);
-
-    // Handler initialization errors if any
-    if (mError)
-    {
-        throw std::runtime_error("Error in Listener initialization: " +
-                                 std::string(Pa_GetErrorText(mError)));
-    }
-    mInitialized = true;
-
     // Obtain default input device and set it to be used
     mInputParameters.device = Pa_GetDefaultInputDevice();
     if (mInputParameters.device == paNoDevice)
     {
-        // Cleanup
-        Pa_Terminate();
-
         throw std::runtime_error(
             "Error in Listener initialization: No input devices exist!");
     }
@@ -63,9 +40,6 @@ Listener::Listener(unsigned int sampleRate, unsigned int framesPerBuffer,
                       mFramesPerBuffer, paClipOff, mRecordCallback, nullptr);
     if (mError)
     {
-        // Cleanup
-        Pa_Terminate();
-
         throw std::runtime_error("Error in Listener initialization: " +
                                  std::string(Pa_GetErrorText(mError)));
     }
@@ -76,7 +50,6 @@ Listener::Listener(unsigned int sampleRate, unsigned int framesPerBuffer,
     {
         // Cleanup
         Pa_CloseStream(mStream);
-        Pa_Terminate();
 
         throw std::runtime_error("Error in Listener initialization: " +
                                  std::string(Pa_GetErrorText(mError)));
@@ -99,13 +72,6 @@ Listener::~Listener()
 
         // Close stream
         Pa_CloseStream(mStream);
-    }
-
-    // Check if we initialized PortAudio before trying to terminate it
-    if (mInitialized)
-    {
-        // Terminate PortAudio instance
-        Pa_Terminate();
     }
 
     std::cout
