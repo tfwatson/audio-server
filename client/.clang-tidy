@@ -1,0 +1,14 @@
+Checks: >
+  -*,
+  readability-simplify-boolean-expr,
+  readability-container-size-empty,
+  readability-redundant-access-specifiers,
+  readability-isolate-declaration,
+  readability-make-member-function-const,
+  readability-delete-null-pointer,
+  cppcoreguidelines-init-variables,
+  cppcoreguidelines-pro-type-member-init,
+  modernize-use-override,
+  google-readability-casting
+
+WarningsAsErrors: ''

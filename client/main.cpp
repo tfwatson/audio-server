@@ -1,80 +1,75 @@
-#include <portaudio.h>
+#include <signal.h>
 
-#include <atomic>
-#include <csignal>
 #include <iostream>
 #include <memory>
 #include <thread>
 
 #include "Listener.hpp"
 #include "Player.hpp"
+#include "Transmitter.hpp"
 
-// Flag for program running state
 std::atomic<bool> running = true;
+
+constexpr unsigned int SAMPLE_RATE = 44100;
+constexpr unsigned int FRAMES_PER_BUFFER = 512;
+constexpr unsigned int QUEUE_CAPACITY = FRAMES_PER_BUFFER * 2;
 
 void signalHandler(int signal)
 {
-    // Set running state to false so program terminates
-    running = false;
+	running = false;
 }
 
 int main()
 {
-    // Register interrupt signal to end the program gracefully
-    signal(SIGINT, signalHandler);
+	struct sigaction sigIntHandler = {};
+	sigIntHandler.sa_handler = signalHandler;
+	sigaction(SIGINT, &sigIntHandler, nullptr);
 
-    // Suppress ALSA/JACK warnings
-    FILE* devNull = fopen("/dev/null", "w");
-    FILE* origStderr = stderr;
-    stderr = devNull;
+	std::cout << "PortAudio initializing...\n";
+	int error = Pa_Initialize();
 
-    // Initialize PortAudio instance
-    std::cout << "PortAudio initializing...\n";
-    int error = Pa_Initialize();
+	if (error)
+	{
+		std::cerr << "Error initializing PortAudio!\n";
+		return 1;
+	}
+	std::cout << "PortAudio successfully initialized!\n";
 
-    // Restore stderr
-    stderr = origStderr;
-    fclose(devNull);
+	// Scope for listener and players to destruct prior to terminating PortAudio
+	{
+		BufferQueue inputBufferQueue(QUEUE_CAPACITY);
+		// TODO: will be fed by data received from the server
+		BufferQueue outputBufferQueue(QUEUE_CAPACITY);
 
-    // Handler initialization errors if any
-    if (error)
-    {
-        std::cerr << "Error initializing PortAudio!\n";
-        return 1;
-    }
-    std::cout << "PortAudio successfully initialized!\n";
+		std::unique_ptr<Listener> listener;
+		std::unique_ptr<Player> player;
+		try
+		{
+			listener = std::make_unique<Listener>(SAMPLE_RATE, FRAMES_PER_BUFFER, inputBufferQueue);
+			player = std::make_unique<Player>(SAMPLE_RATE, FRAMES_PER_BUFFER, outputBufferQueue);
+		}
+		catch (const std::runtime_error& error)
+		{
+			Pa_Terminate();
 
-    // Scope for listener and players to destruct prior to terminating PortAudio
-    {
-        // Setup Listener instance
-        std::unique_ptr<Listener> listener;
-        std::unique_ptr<Player> player;
-        try
-        {
-            listener = std::make_unique<Listener>(44100, 512, 2);
-            player = std::make_unique<Player>(44100, 512, 2);
-        }
-        catch (const std::runtime_error& error)
-        {
-            // Cleanup
-            Pa_Terminate();
+			std::cerr << error.what() << '\n';
+			return 1;
+		}
 
-            std::cerr << error.what() << '\n';
-            return 1;
-        }
+		Transmitter transmitter(inputBufferQueue, running);
+		std::thread transmitterThread(&Transmitter::Run, &transmitter);
 
-        // Wait for interrupt signal to gracefully exit
-        while (running)
-        {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-        std::cout << "Interrupt signal received. Exiting...\n";
-    }
+		while (running)
+		{
+			std::this_thread::sleep_for(std::chrono::milliseconds(100));
+		}
+		std::cout << "Interrupt signal received. Exiting...\n";
 
-    // Terminate PortAudio instance
-    Pa_Terminate();
-    std::cout << "PortAudio successfully terminated!\n";
+		transmitterThread.join();
+	}
 
-    // Exit successfully
-    return 0;
+	Pa_Terminate();
+	std::cout << "PortAudio successfully terminated!\n";
+
+	return 0;
 }

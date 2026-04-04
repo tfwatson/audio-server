@@ -1,88 +1,95 @@
 #include "Listener.hpp"
 
-#include <portaudio.h>
-
 #include <iostream>
 #include <stdexcept>
 
-Listener::Listener(unsigned int sampleRate, unsigned int framesPerBuffer,
-                   unsigned int numChannels)
-    : mSampleRate(sampleRate),
-      mFramesPerBuffer(framesPerBuffer),
-      mNumChannels(numChannels)
+Listener::Listener(unsigned int sampleRate, unsigned int framesPerBuffer, BufferQueue& bufferQueue)
+	: mSampleRate(sampleRate),
+	  mFramesPerBuffer(framesPerBuffer),
+	  mInputParameters(),
+	  mBufferQueue(bufferQueue)
 {
-    std::cout << "Listener initializing...\n";
+	std::cout << "Listener initializing...\n";
 
-    // Obtain default input device and set it to be used
-    mInputParameters.device = Pa_GetDefaultInputDevice();
-    if (mInputParameters.device == paNoDevice)
-    {
-        throw std::runtime_error(
-            "Error in Listener initialization: No input devices exist!");
-    }
+	mInputParameters.device = Pa_GetDefaultInputDevice();
+	if (mInputParameters.device == paNoDevice)
+	{
+		throw std::runtime_error("Error in Listener initialization: No input devices exist!");
+	}
 
-    // Set the number of input channels to whatever was passed in
-    mInputParameters.channelCount = mNumChannels;
+	mInputParameters.channelCount = 1;
+	mInputParameters.sampleFormat = paFloat32;
+	mInputParameters.suggestedLatency =
+		Pa_GetDeviceInfo(mInputParameters.device)->defaultLowInputLatency;
 
-    // Set our samples to be represented by 32-bit floats
-    mInputParameters.sampleFormat = paFloat32;
+	mInputParameters.hostApiSpecificStreamInfo = nullptr;
 
-    // Set the suggested latency to be whatever the input device is set to be
-    mInputParameters.suggestedLatency =
-        Pa_GetDeviceInfo(mInputParameters.device)->defaultLowInputLatency;
+	PaError error = Pa_OpenStream(&mStream,
+						  &mInputParameters,
+						  nullptr,
+						  mSampleRate,
+						  mFramesPerBuffer,
+						  paClipOff,
+						  RecordCallback,
+						  &mBufferQueue);
+	if (error)
+	{
+		throw std::runtime_error("Error in Listener initialization: " +
+								 std::string(Pa_GetErrorText(error)));
+	}
 
-    // No host API specific stream info needed
-    mInputParameters.hostApiSpecificStreamInfo = nullptr;
+	error = Pa_StartStream(mStream);
+	if (error)
+	{
+		Pa_CloseStream(mStream);
 
-    // Open stream using constructor parameters
-    mError =
-        Pa_OpenStream(&mStream, &mInputParameters, nullptr, mSampleRate,
-                      mFramesPerBuffer, paClipOff, mRecordCallback, nullptr);
-    if (mError)
-    {
-        throw std::runtime_error("Error in Listener initialization: " +
-                                 std::string(Pa_GetErrorText(mError)));
-    }
+		throw std::runtime_error("Error in Listener initialization: " +
+								 std::string(Pa_GetErrorText(error)));
+	}
 
-    // Start stream to collect audio from user
-    mError = Pa_StartStream(mStream);
-    if (mError)
-    {
-        // Cleanup
-        Pa_CloseStream(mStream);
-
-        throw std::runtime_error("Error in Listener initialization: " +
-                                 std::string(Pa_GetErrorText(mError)));
-    }
-
-    std::cout << "Listener successfully initialized. Now listening to audio!\n";
+	std::cout << "Listener successfully initialized. Now listening to audio!\n";
 }
 
 Listener::~Listener()
 {
-    // Check if stream is initialized before trying to close it
-    if (mStream)
-    {
-        // Check if stream is active before aborting it
-        if (Pa_IsStreamActive(mStream))
-        {
-            // Abort stream for immediate end to audio collection
-            Pa_AbortStream(mStream);
-        }
+	if (mStream)
+	{
+		if (Pa_IsStreamActive(mStream))
+		{
+			// Abort rather than Stop to halt immediately without waiting for
+			// remaining buffers to finish
+			Pa_AbortStream(mStream);
+		}
+		Pa_CloseStream(mStream);
+	}
 
-        // Close stream
-        Pa_CloseStream(mStream);
-    }
-
-    std::cout
-        << "Listener successfully destroyed. No longer listening to audio!\n";
+	std::cout << "Listener successfully destroyed. No longer listening to audio!\n";
 }
 
-int Listener::mRecordCallback(const void* input, void* output,
-                              unsigned long frameCount,
-                              const PaStreamCallbackTimeInfo* timeInfo,
-                              const PaStreamCallbackFlags statusFlags,
-                              void* userData)
+int Listener::RecordCallback(const void* input,
+							 void* output,
+							 unsigned long frameCount,
+							 const PaStreamCallbackTimeInfo* timeInfo,
+							 const PaStreamCallbackFlags statusFlags,
+							 void* userData)
 {
-    return paContinue;
+	BufferQueue& bufferQueue = *(static_cast<BufferQueue*>(userData));
+
+	if (input != nullptr)
+	{
+		const float* rptr = static_cast<const float*>(input);
+		for (unsigned int i = 0; i < frameCount; ++i)
+		{
+			bufferQueue.push(*rptr++);
+		}
+	}
+	else
+	{
+		for (unsigned int i = 0; i < frameCount; ++i)
+		{
+			bufferQueue.push(0.0f);
+		}
+	}
+
+	return paContinue;
 }
