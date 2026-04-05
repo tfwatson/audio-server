@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <memory>
+#include <string>
 #include <thread>
 
 #include "Listener.hpp"
@@ -13,6 +14,8 @@ std::atomic<bool> running = true;
 constexpr unsigned int SAMPLE_RATE = 44100;
 constexpr unsigned int FRAMES_PER_BUFFER = 512;
 constexpr unsigned int QUEUE_CAPACITY = FRAMES_PER_BUFFER * 2;
+const std::string SERVER_ADDRESS = "127.0.0.1";
+constexpr uint16_t SERVER_PORT = 42069;
 
 void signalHandler(int signal)
 {
@@ -56,7 +59,8 @@ int main()
 			return 1;
 		}
 
-		Transmitter transmitter(inputBufferQueue, running);
+		Transmitter transmitter(
+			inputBufferQueue, running, SAMPLE_RATE, FRAMES_PER_BUFFER, SERVER_ADDRESS, SERVER_PORT);
 		std::thread transmitterThread(&Transmitter::Run, &transmitter);
 
 		while (running)

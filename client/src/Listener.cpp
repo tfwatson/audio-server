@@ -25,13 +25,13 @@ Listener::Listener(unsigned int sampleRate, unsigned int framesPerBuffer, Buffer
 	mInputParameters.hostApiSpecificStreamInfo = nullptr;
 
 	PaError error = Pa_OpenStream(&mStream,
-						  &mInputParameters,
-						  nullptr,
-						  mSampleRate,
-						  mFramesPerBuffer,
-						  paClipOff,
-						  RecordCallback,
-						  &mBufferQueue);
+								  &mInputParameters,
+								  nullptr,
+								  mSampleRate,
+								  mFramesPerBuffer,
+								  paClipOff,
+								  RecordCallback,
+								  &mBufferQueue);
 	if (error)
 	{
 		throw std::runtime_error("Error in Listener initialization: " +

@@ -25,13 +25,13 @@ Player::Player(unsigned int sampleRate, unsigned int framesPerBuffer, BufferQueu
 	mOutputParameters.hostApiSpecificStreamInfo = nullptr;
 
 	PaError error = Pa_OpenStream(&mStream,
-						  nullptr,
-						  &mOutputParameters,
-						  mSampleRate,
-						  mFramesPerBuffer,
-						  paClipOff,
-						  PlaybackCallback,
-						  &mBufferQueue);
+								  nullptr,
+								  &mOutputParameters,
+								  mSampleRate,
+								  mFramesPerBuffer,
+								  paClipOff,
+								  PlaybackCallback,
+								  &mBufferQueue);
 	if (error)
 	{
 		throw std::runtime_error("Error in Player initialization: " +
@@ -67,11 +67,11 @@ Player::~Player()
 }
 
 int Player::PlaybackCallback(const void* input,
-						 void* output,
-						 unsigned long frameCount,
-						 const PaStreamCallbackTimeInfo* timeInfo,
-						 const PaStreamCallbackFlags statusFlags,
-						 void* userData)
+							 void* output,
+							 unsigned long frameCount,
+							 const PaStreamCallbackTimeInfo* timeInfo,
+							 const PaStreamCallbackFlags statusFlags,
+							 void* userData)
 {
 	float* wptr = static_cast<float*>(output);
 	BufferQueue& bufferQueue = *(static_cast<BufferQueue*>(userData));
