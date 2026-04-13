@@ -10,6 +10,6 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(PORTAUDIO REQUIRED portaudio-2.0)
 find_package(Boost REQUIRED)
 
-add_executable(audio-server main.cpp)
+add_executable(audio-server main.cpp src/Connection.cpp)
 target_include_directories(audio-server PRIVATE include ${PORTAUDIO_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS})
 target_link_libraries(audio-server PRIVATE ${PORTAUDIO_LIBRARIES})

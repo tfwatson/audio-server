@@ -7,44 +7,15 @@
 #include <csignal>
 #include <cstring>
 #include <iostream>
+#include <thread>
 #include <vector>
 
+#include "Buffer.hpp"
+#include "BufferQueue.hpp"
+#include "Connection.hpp"
 #include "PacketHeader.hpp"
 
 std::atomic<bool> running = true;
-
-bool ReceivePacket(int fd, PacketHeader& packetHeader, std::vector<float>& packetBody)
-{
-	char* headerPtr = reinterpret_cast<char*>(&packetHeader);
-	size_t remaining = sizeof(packetHeader);
-	while (remaining > 0)
-	{
-		ssize_t bytesReceived = recv(fd, headerPtr, remaining, 0);
-		if (bytesReceived == -1)
-		{
-			return false;
-		}
-		headerPtr += bytesReceived;
-		remaining -= bytesReceived;
-	}
-	packetHeader.mNumFrames = ntohl(packetHeader.mNumFrames);
-	packetHeader.mSampleRate = ntohl(packetHeader.mSampleRate);
-
-	char* bodyPtr = reinterpret_cast<char*>(packetBody.data());
-	remaining = packetHeader.mNumFrames * sizeof(float);
-	while (remaining > 0)
-	{
-		ssize_t bytesReceived = recv(fd, bodyPtr, remaining, 0);
-		if (bytesReceived == -1)
-		{
-			return false;
-		}
-		bodyPtr += bytesReceived;
-		remaining -= bytesReceived;
-	}
-
-	return true;
-}
 
 void signalHandler(int signal)
 {
@@ -71,15 +42,19 @@ int main()
 	socklen_t clientLen = sizeof(clientAddr);
 	int clientfd = accept(sockfd, reinterpret_cast<struct sockaddr*>(&clientAddr), &clientLen);
 
-	std::vector<float> buffer;
-	buffer.resize(512, 0.0f);
-	PacketHeader header{};
+	BufferQueue receiveQueue(5);
+	BufferQueue transmitQueue(5);
+	Connection client(running, clientfd, addr, receiveQueue, transmitQueue);
+	std::thread clientThread(&Connection::Handle, &client);
+
+	Buffer intermittent;
 	while (running)
 	{
-		ReceivePacket(clientfd, header, buffer);
-		std::cout << "Received packet with " << header.mNumFrames << " frames!\n";
-		buffer.clear();
-		header.mNumFrames = 0;
-		header.mSampleRate = 0;
+		if (receiveQueue.read_available() > 0 && receiveQueue.pop(intermittent)) {
+			transmitQueue.push(intermittent);
+			std::cout << "Processed full packet!\n";
+		}
 	}
+
+	clientThread.join();
 }
