@@ -12,3 +12,4 @@ Checks: >
   google-readability-casting
 
 WarningsAsErrors: ''
+HeaderFilterRegex: '.*/(client|server)/include/.*'

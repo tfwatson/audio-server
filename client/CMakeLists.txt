@@ -7,9 +7,9 @@ set(CMAKE_CXX_CLANG_TIDY clang-tidy)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(PORTAUDIO REQUIRED portaudio-2.0)
+pkg_check_modules(PORTAUDIO REQUIRED IMPORTED_TARGET portaudio-2.0)
 find_package(Boost REQUIRED)
 
-add_executable(audio-client main.cpp src/Listener.cpp src/Player.cpp src/Transmitter.cpp)
-target_include_directories(audio-client PRIVATE include ${PORTAUDIO_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS})
-target_link_libraries(audio-client PRIVATE ${PORTAUDIO_LIBRARIES})
+add_executable(audio-client main.cpp)
+target_include_directories(audio-client PRIVATE include)
+target_link_libraries(audio-client PRIVATE PkgConfig::PORTAUDIO Boost::headers)
