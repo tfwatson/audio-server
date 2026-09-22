@@ -2,18 +2,21 @@
 #include <signal.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #include <array>
+#include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "boost/lockfree/spsc_queue.hpp"
-#include "portaudio.h"
 
 const std::string SERVER_PORT = "42069";
 constexpr int BACKLOG = 10;
@@ -26,6 +29,7 @@ using SampleQueue = boost::lockfree::spsc_queue<float>;
 using Buffer = std::array<float, SAMPLES_PER_BUFFER>;
 
 std::atomic<bool> running{true};
+std::vector<std::thread> clientThreads;
 
 void signalHandler(int signal)
 {
@@ -34,58 +38,78 @@ void signalHandler(int signal)
 
 void handleClient(int sockfd)
 {
+	bool connected = true;
 	Buffer incomingBuffer{0.0f};
 	Buffer outgoingBuffer{0.0f};
-	while (running)
+	while (running && connected)
 	{
 		unsigned long bytesToReceive = SAMPLES_PER_BUFFER * sizeof(float);
 		char* incomingData = reinterpret_cast<char*>(incomingBuffer.data());
-		while (bytesToReceive > 0 && running)
+		while (running && connected && bytesToReceive > 0)
 		{
 			const ssize_t bytesReceived = recv(sockfd, incomingData, bytesToReceive, 0);
 			if (bytesReceived == 0)	 // peer closed
 			{
-				running = false;
-				return;
+				connected = false;
+				break;
 			}
 			if (bytesReceived < 0)
 			{
 				if (errno == EINTR)
 					continue;
-				running = false;
-				return;
+				connected = false;
+				break;
 			}
 			incomingData += bytesReceived;
 			bytesToReceive -= static_cast<size_t>(bytesReceived);
 		}
 
 		outgoingBuffer = incomingBuffer;
+
 		const char* outgoingData = reinterpret_cast<const char*>(outgoingBuffer.data());
 		unsigned long bytesToSend = SAMPLES_PER_BUFFER * sizeof(float);
-		while (bytesToSend > 0 && running)
+		while (running && connected && bytesToSend > 0)
 		{
 			const ssize_t bytesSent = send(sockfd, outgoingData, bytesToSend, 0);
 			if (bytesSent < 0)
 			{
 				if (errno == EINTR)
 					continue;
-				running = false;
+				connected = false;
 				break;
 			}
 			outgoingData += bytesSent;
 			bytesToSend -= static_cast<size_t>(bytesSent);
 		}
 	}
+
+	shutdown(sockfd, SHUT_RDWR);
+	close(sockfd);
 }
 
 int main()
 {
 	// Set up signal handling for graceful exit
-	signal(SIGINT, signalHandler);
-	signal(SIGPIPE, SIG_IGN);
+	struct sigaction sa{};
+	sa.sa_handler = signalHandler;
+	sigemptyset(&sa.sa_mask);
+	sa.sa_flags = 0;
+
+	if (sigaction(SIGINT, &sa, nullptr) == -1)
+	{
+		std::cout << "sigaction SIGINT: " << strerror(errno) << std::endl;
+		exit(1);
+	}
+
+	// SIGPIPE: ignore, so send() returns EPIPE instead of killing the process
+	struct sigaction sp{};
+	sp.sa_handler = SIG_IGN;
+	sigemptyset(&sp.sa_mask);
+	sp.sa_flags = 0;
+	sigaction(SIGPIPE, &sp, nullptr);
 
 	// Setup initial network variables
-	int sockfd{-1};
+	int listenFd{-1};
 	struct addrinfo hints{};
 	struct addrinfo* res{};
 	struct addrinfo* p{};
@@ -98,22 +122,28 @@ int main()
 	hints.ai_family = AF_INET;
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_flags = AI_PASSIVE;
-	getaddrinfo(nullptr, SERVER_PORT.c_str(), &hints, &res);
+	int error{};
+	if ((error = getaddrinfo(nullptr, SERVER_PORT.c_str(), &hints, &res)) != 0)
+	{
+		std::cout << gai_strerror(error) << std::endl;
+		exit(1);
+	}
 
 	// Look through results and bind to first we can
 	for (p = res; p != nullptr; p = p->ai_next)
 	{
-		if ((sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1)
+		if ((listenFd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1)
 		{
 			continue;
 		}
 
-		if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1)
+		if (setsockopt(listenFd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1)
 		{
+			freeaddrinfo(res);
 			exit(1);
 		}
 
-		if (bind(sockfd, p->ai_addr, p->ai_addrlen) == -1)
+		if (bind(listenFd, p->ai_addr, p->ai_addrlen) == -1)
 		{
 			continue;
 		}
@@ -123,19 +153,57 @@ int main()
 
 	if (p == nullptr)
 	{
+		freeaddrinfo(res);
 		exit(1);
 	}
 
-	if (listen(sockfd, BACKLOG) == -1)
+	if (listen(listenFd, BACKLOG) == -1)
 	{
+		freeaddrinfo(res);
 		exit(1);
 	}
 
 	// Free dynamically allocated information needed for initial connection
 	freeaddrinfo(res);
 
-	incomingAddrSize = sizeof(incomingAddr);
-	int newFd = accept(sockfd, reinterpret_cast<struct sockaddr*>(&incomingAddr), &incomingAddrSize);
+	while (running)
+	{
+		// Accept incoming client connections, ensuring proper error handling
+		incomingAddrSize = sizeof(incomingAddr);
+		int clientFd =
+			accept(listenFd, reinterpret_cast<struct sockaddr*>(&incomingAddr), &incomingAddrSize);
+		if (clientFd == -1)
+		{
+			if (errno == EINTR || errno == ECONNABORTED)
+			{
+				// Not an actual error, continue
+				continue;
+			}
+			else if (errno == EMFILE || errno == ENFILE)
+			{
+				// Too many open files, wait for system to clear some then continue
+				std::this_thread::sleep_for(std::chrono::milliseconds(100));
+				continue;
+			}
+			else
+			{
+				// Server failure, set flag to shut down connection for all clients
+				running = false;
+				break;
+			}
+		}
 
-	handleClient(newFd);
+		// If connection to client is successful, spawn a thread to handle that client
+		clientThreads.emplace_back(handleClient, clientFd);
+	}
+
+	// On shutdown, join all client threads
+	for (auto& thread : clientThreads)
+	{
+		thread.join();
+	}
+
+	// Close out listening FD
+	shutdown(listenFd, SHUT_RDWR);
+	close(listenFd);
 }
