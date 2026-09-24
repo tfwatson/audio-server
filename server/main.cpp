@@ -4,6 +4,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cerrno>
@@ -11,7 +12,11 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <iostream>
+#include <memory>
+#include <mutex>
+#include <numeric>
 #include <string>
 #include <thread>
 #include <vector>
@@ -23,20 +28,31 @@ constexpr int BACKLOG = 10;
 constexpr unsigned int SAMPLE_RATE = 44100;
 constexpr unsigned int SAMPLES_PER_BUFFER = 512;
 constexpr unsigned int NUM_CHANNELS = 1;
-constexpr unsigned int QUEUE_CAPACITY = SAMPLES_PER_BUFFER * 8;
+constexpr unsigned int QUEUE_CAPACITY = 8;
 
 using SampleQueue = boost::lockfree::spsc_queue<float>;
 using Buffer = std::array<float, SAMPLES_PER_BUFFER>;
+using BufferQueue = boost::lockfree::spsc_queue<Buffer>;
 
 std::atomic<bool> running{true};
-std::vector<std::thread> clientThreads;
+
+struct Client
+{
+	BufferQueue incomingBuffers{QUEUE_CAPACITY};
+	BufferQueue outgoingBuffers{QUEUE_CAPACITY};
+	std::thread thread{};
+	std::atomic<int> fd{-1};
+};
+
+std::vector<std::shared_ptr<Client>> clients;
+std::mutex clientsMutex;
 
 void signalHandler(int signal)
 {
 	running = false;
 }
 
-void handleClient(int sockfd)
+void handleClient(std::shared_ptr<Client> client)
 {
 	bool connected = true;
 	Buffer incomingBuffer{0.0f};
@@ -47,7 +63,7 @@ void handleClient(int sockfd)
 		char* incomingData = reinterpret_cast<char*>(incomingBuffer.data());
 		while (running && connected && bytesToReceive > 0)
 		{
-			const ssize_t bytesReceived = recv(sockfd, incomingData, bytesToReceive, 0);
+			const ssize_t bytesReceived = recv(client->fd, incomingData, bytesToReceive, 0);
 			if (bytesReceived == 0)	 // peer closed
 			{
 				connected = false;
@@ -64,13 +80,14 @@ void handleClient(int sockfd)
 			bytesToReceive -= static_cast<size_t>(bytesReceived);
 		}
 
-		outgoingBuffer = incomingBuffer;
+		client->incomingBuffers.push(incomingBuffer);
+		client->outgoingBuffers.pop(outgoingBuffer);
 
 		const char* outgoingData = reinterpret_cast<const char*>(outgoingBuffer.data());
 		unsigned long bytesToSend = SAMPLES_PER_BUFFER * sizeof(float);
 		while (running && connected && bytesToSend > 0)
 		{
-			const ssize_t bytesSent = send(sockfd, outgoingData, bytesToSend, 0);
+			const ssize_t bytesSent = send(client->fd, outgoingData, bytesToSend, 0);
 			if (bytesSent < 0)
 			{
 				if (errno == EINTR)
@@ -83,8 +100,48 @@ void handleClient(int sockfd)
 		}
 	}
 
-	shutdown(sockfd, SHUT_RDWR);
-	close(sockfd);
+	shutdown(client->fd, SHUT_RDWR);
+	close(client->fd);
+}
+
+void mixBuffers()
+{
+	// Initial variable setup to avoid making copies
+	Buffer masterBuffer{0};
+	Buffer outgoingBuffer{0};
+
+	while (running) {
+		// Make a copy to work with to not block updates to clients list
+		clientsMutex.lock();
+		auto clientsCopy = clients;
+		clientsMutex.unlock();
+
+		std::vector<Buffer> clientBuffers(clientsCopy.size());
+
+		for (int i = 0; i < clientsCopy.size(); i++)
+		{
+			if (clientsCopy[i]->incomingBuffers.read_available()) {
+				clientsCopy[i]->incomingBuffers.pop(clientBuffers[i]);
+			}
+		}
+
+		for (const auto& buffer : clientBuffers) {
+			std::transform(masterBuffer.begin(), masterBuffer.end(), buffer.begin(), masterBuffer.begin(), std::plus<float>());
+		}
+			
+		for (int i = 0; i < clientsCopy.size(); i++)
+		{
+			if (clientsCopy[i]->outgoingBuffers.write_available())
+			{
+				std::transform(masterBuffer.begin(), masterBuffer.end(), clientBuffers[i].begin(), outgoingBuffer.begin(), std::minus<float>());
+				clientsCopy[i]->outgoingBuffers.push(outgoingBuffer);
+			}
+		}
+
+		masterBuffer.fill(0);
+		outgoingBuffer.fill(0);
+		std::this_thread::sleep_for(std::chrono::milliseconds(15));
+	}
 }
 
 int main()
@@ -166,6 +223,9 @@ int main()
 	// Free dynamically allocated information needed for initial connection
 	freeaddrinfo(res);
 
+	// Start mixing thread
+	std::thread mixingThread(mixBuffers);
+
 	while (running)
 	{
 		// Accept incoming client connections, ensuring proper error handling
@@ -193,15 +253,21 @@ int main()
 			}
 		}
 
-		// If connection to client is successful, spawn a thread to handle that client
-		clientThreads.emplace_back(handleClient, clientFd);
+		// If connection to client is successful, handle new client and add to list of clients
+		std::shared_ptr<Client> client = std::make_shared<Client>();
+		client->fd = clientFd;
+		client->thread = std::thread(handleClient, client);
+		clientsMutex.lock();
+		clients.push_back(client);
+		clientsMutex.unlock();
 	}
 
-	// On shutdown, join all client threads
-	for (auto& thread : clientThreads)
+	// On shutdown, join all threads
+	for (auto client : clients)
 	{
-		thread.join();
+		client->thread.join();
 	}
+	mixingThread.join();
 
 	// Close out listening FD
 	shutdown(listenFd, SHUT_RDWR);
